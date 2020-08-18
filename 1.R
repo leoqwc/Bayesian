@@ -1,0 +1,6 @@
+pdf("1.pdf", width = 12, height = 6)
+par(mfrow = c(1,2))
+plot(density(ret), main="")
+stats::ts.plot(ret, ylim=c(-0.1, 0.1), main="")
+par(mfrow = c(1,1))
+dev.off()
