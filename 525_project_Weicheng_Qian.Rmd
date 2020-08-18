@@ -1,0 +1,182 @@
+---
+title: "Final Project, STAT 525"
+author: "Weicheng Qian"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE, warning=FALSE,echo=FALSE}
+library(gamair)
+library(coda)
+library(LearnBayes) 
+library(rstan)
+library(tictoc)
+library(rstan)
+library(bayesplot)
+library(MASS)
+library(rstanarm)
+library(TSstudio)
+library(fpp2)
+library(forecast)
+library(LaplacesDemon)
+library(MitISEM)
+library(tseries)
+library(AdMit)
+library(tseries)
+library(fGarch)
+library(MSGARCH)
+library(rugarch)
+library(stochvol)
+library(PerformanceAnalytics)
+```
+
+```{r}
+GSPC=read.csv('^GSPC.csv', header=T)
+prices<-as.vector(get.hist.quote("^GSPC", quote="AdjClose", start="1998-01-02", end="2002-12-26"))
+data<-100*(prices[-1]-prices[-length(prices)])/+(prices[-length(prices)])
+summary(data)
+sd(data)
+plot(density(data))
+```
+```{r}
+prior.mGARCH<-function(omega, lambda, beta, alpha, rho, mu, log=TRUE) {
+  c1<-(omega>0&omega<1&beta>=0&alpha>=0)
+  c2<-(beta+alpha<1)
+  c3<-(lambda>=0&lambda<=1)
+  c4<-(rho>0.5&rho<1)
+  c5<-(mu>-1&mu<1)
+  r1<-c1&c2&c3&c4&c5
+  r2<-rep.int(-Inf,length(omega))
+  tmp<-log(2)
+  r2[r1==TRUE]<-tmp
+  if (!log) r2<-exp(r2)
+  cbind(r1, r2)
+}
+
+post.mGARCH<-function(theta, data, h1, log=TRUE) {
+  if (is.vector(theta)) theta<-matrix(theta, nrow=1)
+  omega<-theta[,1]
+  lambda<-theta[,2]
+  beta<-theta[,3]
+  alpha<-theta[,4]
+  rho<-theta[,5]
+  mu<-theta[,6]
+  N<-nrow(theta)
+  pos<-2:length(data)
+  prior<-prior.mGARCH(omega=omega, lambda=lambda,
+                      beta=beta, alpha=alpha, rho=rho, mu=mu)
+  d<-rep.int(-Inf, N)
+  for (i in 1:N) {
+    if (prior[i,1]==TRUE) {
+     h<-c(h1, omega[i]+alpha[i]*(data[pos-1]-mu[i])^2)
+     for (j in pos) {
+       h[j]<-h[j]+beta[i]*h[j-1]
+     }
+     sigma<-1/(rho[i]+((1-rho[i])/lambda[i]))
+     tmp1<-dnorm(data[pos], mu[i], sqrt(h[pos]*sigma), log=TRUE)
+     tmp2<-dnorm(data[pos], mu[i], sqrt(h[pos]*sigma/lambda[i]), log=TRUE)
+     tmp<-log(rho[i]*exp(tmp1)+(1-rho[i])*exp(tmp2))
+     d[i]<-sum(tmp)+prior[i,2]
+    }
+  }
+  if(!log)d<-exp(d)
+  as.numeric(d)
+}
+```
+
+```{r}
+mu0<-c(0.08, 0.37, 0.86, 0.03, 0.82, 0.03)
+names(mu0)<-c("omega", "lambda", "beta", "alpha", "rho", "mu")
+h1<-var(data)
+set.seed(1234)
+app.mGARCH<-MitISEM(KERNEL=post.mGARCH, mu0=mu0, h1=h1, data=data)
+app.mGARCH$summary
+IS.mGARCH<-AdMitIS(N=10e4, KERNEL=post.mGARCH,
+                   mit=app.mGARCH$mit, data=data, h1=h1)
+IS.mGARCH
+```
+```{r}
+data("exrates")
+EDU=read.csv('EDU.csv', header=T)
+prices2<-as.vector(get.hist.quote("EDU", quote="Close", start="2013-01-02", end="2013-12-31"))
+data2<-100*(prices2[-1]-prices2[-length(prices2)])/+(prices2[-length(prices2)])
+
+summary(data2)
+mu0<-c(0.08, 0.25, 0.86, 0.08, 0.87, 0.016)
+names(mu0)<-c("omega", "lambda", "beta", "alpha", "rho", "mu")
+h1<-var(data2)
+set.seed(1234)
+app.mGARCH<-MitISEM(KERNEL=post.mGARCH, mu0=mu0, h1=h1, data=data2)
+app.mGARCH$summary
+IS.mGARCH<-AdMitIS(N=10e4, KERNEL=post.mGARCH,
+                   mit=app.mGARCH$mit, data=data2, h1=h1)
+IS.mGARCH
+n=rnorm(2000, 0.002, 0.0035)
+plot(as.mcmc(n))
+```
+
+
+```{r}
+EDU=ts(read.csv('EDU.csv', header=T))
+E=EDU[,5]
+E=E/stats::lag(E,-1) - 1
+mod1<-garchFit(~ 1 + garch(1,1), data=E, trace=FALSE)
+summary(mod1)
+spec<-CreateSpec(variance.spec=list(model=c("gjrGARCH","sGARCH")),
+                   distribution.spec=list(distribution=c("norm","norm")),
+                 switch.spec=list(do.mix=TRUE))
+set.seed(123)
+fit<-FitMCMC(spec=spec, data=E, ctr=list(nburn=500, nmcmc=10000, nthin=1))
+plot(as.mcmc(fit$par[,]), main="")
+geweke.diag(as.mcmc(fit$par[,1]))
+geweke.diag(as.mcmc(fit$par[,2]))
+autocorr.plot(as.mcmc(fit$par[,2]))
+
+
+acf(fit$par[,])
+summary(fit)
+
+plot(mod1, which=9)
+plot(mod1, which=10)
+resi <- residuals(mod1, standardize=TRUE)
+acf(resi, lag.max=22, main="")
+
+split_E<-ts_split(ts.obj=E, sample.out=55)
+training<-split_E$train
+testing<-split_E$test
+summary(training)
+sd(training)
+autoplot(training)
+plot(density(training), xlim=c(-0.2, 0.15))
+```
+
+```{r}
+plot(EDU$Date, EDU$Close, type="l")
+plot(data2, type = "l", main = "")
+ret<-logret(EDU$Close, demean = TRUE)
+res<-svsample(ret, priormu=c(-3.254, -1.645), priorphi=c(5, 1.5), priorsigma=1)
+summary(res, showlatent=FALSE)
+volplot(res, forecast=10)
+plot(data2, type = "l", main = "")
+res<-updatesummary(res, quantiles=c(0.01, 0.1, 0.5, 0.9, 0.99))
+volplot(res, forecast=10)
+paratraceplot(res)
+paradensplot(res, showobs = FALSE)
+```
+
+```{r}
+EDU=read.csv('EDU.csv', header=T)
+ret<-logret(EDU$Close[0:203], demean = TRUE)
+kurtosis(ret, method = "moment")
+Box.test(ret, lag=50, type="Ljung-Box")
+
+prices2<-as.vector(get.hist.quote("EDU", quote="Close", start="2013-01-02", end="2013-12-31"))
+data2<-100*(prices2[-1]-prices2[-length(prices2)])/+(prices2[-length(prices2)])
+plot(density(ret), main="")
+stats::ts.plot(ret, ylim=c(-0.1, 0.1), main="")
+summary(ret)
+sd(ret)
+```
+
